@@ -6,6 +6,7 @@ shape each channel with its own 12-band EQ, and fade between two groups of
 channels with ChannelMix — all live, all from the bar.
 
 ![Screenshot](screenshot.png)
+![Demo](demo.gif)
 
 ## Features
 
