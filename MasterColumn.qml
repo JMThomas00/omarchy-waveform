@@ -76,61 +76,34 @@ Item {
       opacity: 0.85
     }
 
-    // Sits in the same row ChannelColumn uses for its EQ preset name —
-    // same font/size so the row height (and everything below it) still
-    // lines up with every channel column. MASTER has no EQ preset of its
-    // own, so this row is free to be the "+ OUT" add-channel button
-    // instead of an inert placeholder.
-    Text {
-      id: addOutLabel
+    // Sits in the same row ChannelColumn uses for its EQ preset name.
+    // MASTER has no EQ preset of its own, so this row is free to be the
+    // "+ OUT" add-channel button instead of an inert placeholder.
+    AddChannelButton {
       anchors.horizontalCenter: parent.horizontalCenter
-      text: "+ OUT"
-      color: addOutArea.containsMouse ? Color.accent : Qt.darker(root.fg, 1.4)
-      font.family: root.bar ? root.bar.fontFamily : undefined
-      font.pixelSize: Style.font.bodySmall
-      font.bold: true
-
-      MouseArea {
-        id: addOutArea
-        anchors.fill: parent
-        anchors.margins: -Style.space(4)
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: root.addChannelRequested("output")
-      }
+      label: "+ OUT"
+      pixelSize: Style.font.bodySmall
+      idleColor: root.fg
+      hoverColor: Color.accent
+      fontFamily: root.bar ? root.bar.fontFamily : ""
+      onClicked: root.addChannelRequested("output")
     }
 
-    // Same row ChannelColumn uses for its DeviceDropdown — no background
-    // box (matching "+ OUT"'s own plain-text look), but still wrapped in
-    // an Item pinned to that row's exact height (label.implicitHeight +
-    // Style.space(6), same formula DeviceDropdown.qml's trigger uses) so
-    // removing the box doesn't shrink the row and throw off the vertical
-    // rhythm below. Hovers to a different theme color than "+ OUT" (which
-    // hovers to Color.accent) so the two read as distinct actions.
-    Item {
-      id: addMicWrap
+    // Same row ChannelColumn uses for its DeviceDropdown — MASTER has no
+    // device to pick, so this row is the "+ MIC" add-channel button
+    // instead. `verticalPadding: Style.space(6)` matches DeviceDropdown's
+    // own trigger-height formula so this row's height still lines up.
+    // Hovers to a different theme color than "+ OUT" (which hovers to
+    // Color.accent) so the two read as distinct actions.
+    AddChannelButton {
       anchors.horizontalCenter: parent.horizontalCenter
-      width: micLabel.implicitWidth
-      height: micLabel.implicitHeight + Style.space(6)
-
-      Text {
-        id: micLabel
-        anchors.centerIn: parent
-        text: "+ MIC"
-        color: addMicArea.containsMouse ? root.addMicAccentColor : Qt.darker(root.fg, 1.4)
-        font.family: root.bar ? root.bar.fontFamily : undefined
-        font.pixelSize: Style.font.caption
-        font.bold: true
-      }
-
-      MouseArea {
-        id: addMicArea
-        anchors.fill: parent
-        anchors.margins: -Style.space(4)
-        hoverEnabled: true
-        cursorShape: Qt.PointingHandCursor
-        onClicked: root.addChannelRequested("input")
-      }
+      label: "+ MIC"
+      pixelSize: Style.font.caption
+      verticalPadding: Style.space(6)
+      idleColor: root.fg
+      hoverColor: root.addMicAccentColor
+      fontFamily: root.bar ? root.bar.fontFamily : ""
+      onClicked: root.addChannelRequested("input")
     }
 
     Item { width: 1; height: Style.space(4) }

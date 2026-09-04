@@ -45,26 +45,21 @@ BarWidget {
   readonly property var nodes: Pipewire.nodes ? Pipewire.nodes.values : []
   readonly property var linkGroups: Pipewire.linkGroups ? Pipewire.linkGroups.values : []
 
-  // Real, selectable devices for the device dropdown — deliberately live
-  // (not routed through the display-snapshot/freeze machinery `channels`/
-  // `masterApps` use for their Repeaters): nothing here is ever mid-drag,
-  // and the dropdown is explicitly supposed to pick up a device connecting
-  // (e.g. Bluetooth headphones) while it's open, so it needs the same
-  // PipeWire-tick-by-tick reactivity that machinery exists to avoid
-  // elsewhere. Excludes every one of Waveform's own hosted nodes (own
-  // sinks/sources AND their hidden _output/_capture sides) so a channel
-  // never lists itself or another channel as a target device.
-  function _isOwnHostedNode(name) {
-    for (var i = 0; i < root.channelSinkNames.length; i++) {
-      var base = root.channelSinkNames[i]
+  // Real, selectable devices for the device dropdown. Excludes every one of
+  // Waveform's own hosted nodes (own sinks/sources AND their hidden
+  // _output/_capture sides) so a channel never lists itself or another
+  // channel as a target device. Takes `ownSinkNames` explicitly (rather
+  // than reading root.channelSinkNames itself) so it stays a pure function
+  // callable mid-recompute in _recomputePipewireDerived below, before
+  // root.channelSinkNames has been updated to match.
+  function _isOwnHostedNode(name, ownSinkNames) {
+    for (var i = 0; i < ownSinkNames.length; i++) {
+      var base = ownSinkNames[i]
       if (name === base || name === base + "_output" || name === base + "_capture") return true
     }
     return false
   }
 
-  readonly property var realOutputDevices: root.nodes.filter(function(n) {
-    return n && n.isSink && !n.isStream && !root._isOwnHostedNode(String(n.name))
-  })
   // `n.type` is a PwNodeType flags value (an int), not a string — comparing
   // `String(n.type)` against "AudioSource" was always false (it just
   // stringifies to the raw bitmask number, confirmed directly: the filter
@@ -78,9 +73,10 @@ BarWidget {
   // output sink (`Audio | Sink`) each still shares *one* bit with
   // `AudioSource` and passed a `!== 0` check. Requiring the full mask to
   // match (`=== PwNodeType.AudioSource`) fixed both false positives.
-  readonly property var realInputDevices: root.nodes.filter(function(n) {
-    return n && !n.isStream && (n.type & PwNodeType.AudioSource) === PwNodeType.AudioSource && !root._isOwnHostedNode(String(n.name))
-  })
+  // Populated only by _recomputePipewireDerived below — see that function's
+  // own comment for why these moved off live reactive bindings.
+  property var realOutputDevices: []
+  property var realInputDevices: []
 
   // ---------------------------------------------------------------- theming
   //
@@ -122,7 +118,7 @@ BarWidget {
     onLoaded: root._themePaletteHex = ThemePaletteGen.parseSortedPalette(text())
   }
 
-  onOpenedChanged: if (root.opened) themeColorsFile.reload()
+  onOpenedChanged: if (root.opened) { themeColorsFile.reload(); root._refreshDisplaySnapshots() }
 
   // Covers the case the open-transition refresh above doesn't: the panel
   // was already open when the theme changed underneath it (confirmed
@@ -203,23 +199,17 @@ BarWidget {
   // (volume/mute/channelmix.*); the same call against its "_capture"
   // sibling listed all 16 gain ports. Without this, live EQ dragging on a
   // mic channel would silently target the wrong node and do nothing.
-  readonly property var baseChannels: channelManager.channels.map(function(c) {
-    var isInput = c.type === "input"
-    var userNode = isInput ? root.findNodeByName("waveform_" + c.id) : root.findSinkByName("waveform_" + c.id)
-    return {
-      id: c.id, name: c.name, type: c.type, status: c.status, eq: c.eq,
-      device: c.device,
-      node: userNode,
-      outputNode: isInput ? userNode : root.findNodeByName("waveform_" + c.id + "_output"),
-      eqControlNode: isInput ? root.findNodeByName("waveform_" + c.id + "_capture") : userNode
-    }
-  })
-
-  readonly property var channelSinkNames: root.baseChannels.map(function(c) { return "waveform_" + c.id })
-
-  readonly property var playbackStreams: root.nodes.filter(function(n) {
-    return AppsModel.isPlaybackStream(n) && !AppsModel.isChannelOwnOutputStream(n, root.channelSinkNames)
-  })
+  // Populated only by _recomputePipewireDerived below.
+  property var baseChannels: []
+  property var channelSinkNames: []
+  property var playbackStreams: []
+  // { "master": [stream,...], "<channelId>": [stream,...] } — grouped by
+  // each stream's *live* sink connection (the WirePlumber link graph is the
+  // source of truth here, not stored assignment intent), so a channel
+  // column always shows what's actually playing through it right now.
+  property var streamAssignments: ({ master: [] })
+  property var masterApps: []
+  property var channels: []
 
   function currentSinkForStream(streamNode) {
     for (var i = 0; i < root.linkGroups.length; i++) {
@@ -229,48 +219,102 @@ BarWidget {
     return null
   }
 
-  // { "master": [stream,...], "<channelId>": [stream,...] } — grouped by
-  // each stream's *live* sink connection (the WirePlumber link graph is the
-  // source of truth here, not stored assignment intent), so a channel
-  // column always shows what's actually playing through it right now.
-  readonly property var streamAssignments: {
-    var result = { master: [] }
-    for (var i = 0; i < root.baseChannels.length; i++) result[root.baseChannels[i].id] = []
-    for (var j = 0; j < root.playbackStreams.length; j++) {
-      var stream = root.playbackStreams[j]
+  // Recomputes the whole PipeWire-derived cascade above (device lists,
+  // channel/node resolution, app-to-channel routing) in one pass, called
+  // from the timer below and immediately on any channelManager.channels
+  // change — NOT bound as live reactive properties off root.nodes the way
+  // this used to be written. `root.nodes`/`root.linkGroups` change
+  // reference on essentially any PipeWire node property tick (peak level,
+  // anything at all — see gotcha #8), so as plain `readonly property var`
+  // bindings this whole cascade (several O(nodes*channels) filters/maps,
+  // one of them nested) was re-executing in full on every single one of
+  // those ticks while the panel was open — exactly when smoothness matters
+  // most. The Repeater-facing displayChannels/displayMasterApps snapshot
+  // below only ever throttled who *consumed* this cascade, never the
+  // recomputation itself. Also fixes a second, related cost: every
+  // ChannelColumn's DeviceDropdown Repeater was bound straight to
+  // realOutputDevices/realInputDevices (MixerView.qml's
+  // `availableDevices:`), so this cascade re-executing on every tick also
+  // meant every column's device-list Repeater rebuilding on every tick,
+  // even for the (usually all) collapsed/closed dropdowns. Throttling the
+  // source to the same ~150ms cadence _refreshDisplaySnapshots already
+  // uses cuts both to ~7/sec regardless of PipeWire tick rate — a
+  // real-time channel/device list only ever needed to feel "live," not to
+  // update at meter-refresh frequency, and every consumer below already
+  // tolerates up to one tick (150ms) of staleness or gets an immediate
+  // refresh on the topology changes (rename/create/delete/status) that
+  // actually need to be prompt.
+  function _recomputePipewireDerived() {
+    var nodes = root.nodes
+
+    var baseChannels = channelManager.channels.map(function(c) {
+      var isInput = c.type === "input"
+      var userNode = isInput ? root.findNodeByName("waveform_" + c.id) : root.findSinkByName("waveform_" + c.id)
+      return {
+        id: c.id, name: c.name, type: c.type, status: c.status, eq: c.eq,
+        device: c.device,
+        node: userNode,
+        outputNode: isInput ? userNode : root.findNodeByName("waveform_" + c.id + "_output"),
+        eqControlNode: isInput ? root.findNodeByName("waveform_" + c.id + "_capture") : userNode
+      }
+    })
+    var channelSinkNames = baseChannels.map(function(c) { return "waveform_" + c.id })
+
+    var realOutputDevices = nodes.filter(function(n) {
+      return n && n.isSink && !n.isStream && !root._isOwnHostedNode(String(n.name), channelSinkNames)
+    })
+    var realInputDevices = nodes.filter(function(n) {
+      return n && !n.isStream && (n.type & PwNodeType.AudioSource) === PwNodeType.AudioSource && !root._isOwnHostedNode(String(n.name), channelSinkNames)
+    })
+
+    var playbackStreams = nodes.filter(function(n) {
+      return AppsModel.isPlaybackStream(n) && !AppsModel.isChannelOwnOutputStream(n, channelSinkNames)
+    })
+
+    var streamAssignments = { master: [] }
+    for (var i = 0; i < baseChannels.length; i++) streamAssignments[baseChannels[i].id] = []
+    for (var j = 0; j < playbackStreams.length; j++) {
+      var stream = playbackStreams[j]
       var sinkNode = root.currentSinkForStream(stream)
       var sinkName = sinkNode ? String(sinkNode.name) : ""
       var zone = "master"
-      for (var k = 0; k < root.baseChannels.length; k++) {
-        if (sinkName === "waveform_" + root.baseChannels[k].id) { zone = root.baseChannels[k].id; break }
+      for (var k = 0; k < baseChannels.length; k++) {
+        if (sinkName === "waveform_" + baseChannels[k].id) { zone = baseChannels[k].id; break }
       }
-      if (!result[zone]) result[zone] = []
-      result[zone].push(stream)
+      if (!streamAssignments[zone]) streamAssignments[zone] = []
+      streamAssignments[zone].push(stream)
     }
-    return result
+
+    var masterApps = streamAssignments.master || []
+    var channels = baseChannels.map(function(c) {
+      return { id: c.id, name: c.name, type: c.type, device: c.device, status: c.status, eq: c.eq, node: c.node, outputNode: c.outputNode,
+        eqControlNode: c.eqControlNode, apps: streamAssignments[c.id] || [], color: root.channelColorFor(c.id) }
+    })
+
+    root.baseChannels = baseChannels
+    root.channelSinkNames = channelSinkNames
+    root.realOutputDevices = realOutputDevices
+    root.realInputDevices = realInputDevices
+    root.playbackStreams = playbackStreams
+    root.streamAssignments = streamAssignments
+    root.masterApps = masterApps
+    root.channels = channels
   }
 
-  readonly property var masterApps: root.streamAssignments.master || []
-
-  readonly property var channels: root.baseChannels.map(function(c) {
-    return { id: c.id, name: c.name, type: c.type, device: c.device, status: c.status, eq: c.eq, node: c.node, outputNode: c.outputNode,
-      eqControlNode: c.eqControlNode, apps: root.streamAssignments[c.id] || [], color: root.channelColorFor(c.id) }
-  })
-
   // Repeater-stable snapshots — MixerView's Repeaters bind to these, never
-  // to the live `channels`/`masterApps` above. Those recompute as a brand
-  // new array (and new per-channel objects) on every single PipeWire tick
-  // (peak levels, anything at all), and feeding that straight into a
-  // Repeater's `model:` treats every tick as "the whole list changed,"
-  // tearing down and rebuilding every ChannelColumn/AppPill delegate.
-  // Mid-drag, that destroys the very AppPill the user's mouse has grabbed —
-  // confirmed directly via logging: the dragged pill's dragGhost reference
-  // went null in clusters that line up exactly with this happening, only
-  // for channel-origin drags (MASTER isn't inside the outer Repeater, so it
-  // was insulated from the outer rebuild). This is the same class of issue
-  // the built-in Audio panel's own snapshot-timer/displayAudioStreams
-  // pattern exists to avoid (see its Panel.qml comment on
-  // displayAudioSinks/displayAudioStreams).
+  // to `channels`/`masterApps` above directly. Even throttled to
+  // _recomputePipewireDerived's own cadence, those are still reassigned as
+  // brand-new arrays (and new per-channel objects) on every recompute, and
+  // feeding that straight into a Repeater's `model:` treats every one as
+  // "the whole list changed," tearing down and rebuilding every
+  // ChannelColumn/AppPill delegate. Mid-drag, that destroys the very
+  // AppPill the user's mouse has grabbed — confirmed directly via logging:
+  // the dragged pill's dragGhost reference went null in clusters that line
+  // up exactly with this happening, only for channel-origin drags (MASTER
+  // isn't inside the outer Repeater, so it was insulated from the outer
+  // rebuild). This is the same class of issue the built-in Audio panel's
+  // own snapshot-timer/displayAudioStreams pattern exists to avoid (see its
+  // Panel.qml comment on displayAudioSinks/displayAudioStreams).
   property var displayChannels: []
   property var displayMasterApps: []
   // {id, name} pairs for ChannelMix's two side-chip Repeaters — same
@@ -279,6 +323,7 @@ BarWidget {
   property var displayMixSideB: []
 
   function _refreshDisplaySnapshots() {
+    root._recomputePipewireDerived()
     root.displayChannels = root.channels
     root.displayMasterApps = root.masterApps
     root.displayMixSideA = root.mixSideA.map(function(id) { return { id: id, name: root.channelById(id).name, color: root.channelColorFor(id) } })
@@ -295,9 +340,16 @@ BarWidget {
 
   onDragInProgressChanged: if (!root.dragInProgress) root._refreshDisplaySnapshots()
 
+  // Gated on root.opened: nothing reads any of this cascade's output while
+  // the panel is closed (every consumer is inside the popup, or a Timer
+  // that's separately gated on its own real condition below), so ticking
+  // this every 150ms while closed was pure waste. The onOpenedChanged
+  // handler above gives an immediate refresh on open rather than waiting
+  // up to 150ms for the first tick, so the panel never shows a stale first
+  // frame.
   Timer {
     interval: 150
-    running: true
+    running: root.opened
     repeat: true
     onTriggered: if (!root.dragInProgress) root._refreshDisplaySnapshots()
   }
@@ -586,6 +638,14 @@ BarWidget {
 
   ChannelManager {
     id: channelManager
+    // Recomputes the derived cascade immediately on any topology change
+    // (create/delete/rename/status/device/eq) instead of waiting for the
+    // next 150ms tick — preserves the instant-update behavior this had
+    // when the cascade was still a live reactive binding, for everything
+    // that reads root.channels/baseChannels/etc. directly (not just the
+    // Repeater-facing displayChannels snapshot, which was already only
+    // ever refreshed on the same ~150ms cadence via the Timer below).
+    onChannelsChanged: root._recomputePipewireDerived()
     defaultSinkName: root.masterSink ? String(root.masterSink.name) : ""
     defaultSourceName: root.masterSource ? String(root.masterSource.name) : ""
   }

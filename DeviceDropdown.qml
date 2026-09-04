@@ -135,7 +135,16 @@ Item {
         width: parent.width
 
         Repeater {
-          model: root.devices
+          // Gated on root.expanded, not bound to root.devices directly:
+          // this Rectangle only hides itself (`listBox`'s own
+          // `visible: root.expanded` above) rather than being
+          // Loader-gated, so without this the Repeater still rebuilds
+          // every delegate every time `devices` changes reference even
+          // while fully collapsed — and every channel column keeps its
+          // own live DeviceDropdown instance regardless of whether it's
+          // the one open one, so this was N Repeater rebuilds per tick for
+          // N-1 dropdowns nobody could even see.
+          model: root.expanded ? root.devices : []
 
           Rectangle {
             id: row
