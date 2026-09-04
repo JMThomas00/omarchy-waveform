@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "jmthomas00.waveform",
+  "name": "Waveform",
+  "version": "1.0.0",
+  "author": "Jordan Thomas (JMThomas00)",
+  "license": "MIT",
+  "description": "SteelSeries Sonar-inspired per-application audio mixer: named channels, per-app routing, per-channel EQ, and ChannelMix.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Waveform",
+    "description": "Per-app audio mixer with channel EQ and ChannelMix",
+    "category": "Audio",
+    "allowMultiple": false
+  }
+}
