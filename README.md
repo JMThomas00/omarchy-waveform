@@ -60,6 +60,13 @@ Install both from the `extra` repo:
 sudo pacman -S lsp-plugins-lv2 cava
 ```
 
+Waveform checks for both whenever the panel opens and tells you directly
+if either is missing — a banner in the mixer if `lsp-plugins-lv2` isn't
+found (channels can't process audio without it), or a small note in the
+EQ view if `cava` isn't found (only the live spectrum behind the curve is
+affected; EQ editing itself still works). Install the missing piece and
+reopen the panel — no restart needed.
+
 ## Installation
 
 ```bash

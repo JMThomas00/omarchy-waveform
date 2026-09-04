@@ -18,6 +18,11 @@ Item {
   // straight through by BarWidget. Never `EqPresets.PRESETS` directly here,
   // so deletes/saves show up without needing the raw built-in list.
   property var presets: []
+  // false only after BarWidget's confirmed `which cava` check comes back
+  // missing — purely cosmetic (the spectrum fill behind the curve), so
+  // this only skips the spawn attempt and shows a small hint, never blocks
+  // EQ editing itself.
+  property bool cavaAvailable: true
 
   signal backRequested()
   // Raw drag: bands changed by hand, detaches from whatever preset was
@@ -68,7 +73,7 @@ Item {
   }
 
   function _startSpectrum() {
-    if (!root.channel) return
+    if (!root.channel || !root.cavaAvailable) return
     mkdirProc.command = ["mkdir", "-p", root.cavaConfigDir]
     mkdirProc.running = true
   }
@@ -295,6 +300,15 @@ Item {
     Text {
       text: root.currentPresetId ? "" : "Custom — drag any point below to shape the curve"
       visible: !root.currentPresetId
+      color: Qt.darker(root.fg, 1.5)
+      font.family: root.bar ? root.bar.fontFamily : undefined
+      font.pixelSize: Style.font.caption
+      font.italic: true
+    }
+
+    Text {
+      visible: !root.cavaAvailable
+      text: "No live spectrum — cava isn't installed. Install with: sudo pacman -S cava"
       color: Qt.darker(root.fg, 1.5)
       font.family: root.bar ? root.bar.fontFamily : undefined
       font.pixelSize: Style.font.caption

@@ -118,7 +118,7 @@ BarWidget {
     onLoaded: root._themePaletteHex = ThemePaletteGen.parseSortedPalette(text())
   }
 
-  onOpenedChanged: if (root.opened) { themeColorsFile.reload(); root._refreshDisplaySnapshots() }
+  onOpenedChanged: if (root.opened) { themeColorsFile.reload(); root._refreshDisplaySnapshots(); root._checkDependencies() }
 
   // Covers the case the open-transition refresh above doesn't: the panel
   // was already open when the theme changed underneath it (confirmed
@@ -144,6 +144,47 @@ BarWidget {
   function channelColorFor(channelId) {
     if (root.themePalette.length === 0) return Color.accent
     return root.themePalette[ThemePaletteGen.colorIndexForId(channelId, root.themePalette.length)]
+  }
+
+  // ------------------------------------------------------ external deps
+  //
+  // Waveform needs two things installed that it can't bundle itself (see
+  // the plan doc's marketplace-submission section for why): `lsp-plugins-lv2`
+  // (the LV2 EQ every channel's filter-chain hosts — without it, a new
+  // channel's sink fails to come up at all, silently rolling back after
+  // `channelStartupTimeoutMs` with nothing but a console.warn no one but a
+  // developer would ever see) and `cava` (purely cosmetic — the live
+  // spectrum behind the EQ curve, everything else works fine without it).
+  // Checked once at startup and again each time the panel opens (cheap:
+  // one `test`/`which` spawn each), so installing either mid-session and
+  // reopening the panel clears the warning without a full shell restart.
+  //
+  // The marker path is the exact file the documented `pacman -S
+  // lsp-plugins-lv2` install produces (confirmed directly on this system:
+  // `pacman -Ql lsp-plugins-lv2` lists it under the package's single combined
+  // `lsp-plugins.lv2` bundle, not its own per-plugin directory) — this only
+  // recognizes that standard install location, not a custom LV2_PATH.
+  readonly property string _lspEqMarkerPath: "/usr/lib/lv2/lsp-plugins.lv2/para_equalizer_x16_stereo.ttl"
+  property bool lspEqAvailable: true
+  property bool cavaAvailable: true
+
+  function _checkDependencies() {
+    if (!lspEqCheckProc.running) { lspEqCheckProc.command = ["test", "-f", root._lspEqMarkerPath]; lspEqCheckProc.running = true }
+    if (!cavaCheckProc.running) { cavaCheckProc.command = ["which", "cava"]; cavaCheckProc.running = true }
+  }
+
+  Process {
+    id: lspEqCheckProc
+    running: false
+    command: []
+    onExited: function(exitCode) { root.lspEqAvailable = exitCode === 0 }
+  }
+
+  Process {
+    id: cavaCheckProc
+    running: false
+    command: []
+    onExited: function(exitCode) { root.cavaAvailable = exitCode === 0 }
   }
 
   function findSinkByName(name) {
@@ -354,7 +395,7 @@ BarWidget {
     onTriggered: if (!root.dragInProgress) root._refreshDisplaySnapshots()
   }
 
-  Component.onCompleted: root._refreshDisplaySnapshots()
+  Component.onCompleted: { root._refreshDisplaySnapshots(); root._checkDependencies() }
 
   function channelById(id) {
     for (var i = 0; i < channels.length; i++)
@@ -754,6 +795,7 @@ BarWidget {
           realInputDevices: root.realInputDevices
           openDeviceDropdownChannelId: root.openDeviceDropdownChannelId
           addMicAccentColor: root.channelColorFor("__waveform_add_mic__")
+          lspEqAvailable: root.lspEqAvailable
           onChannelHeaderClicked: function(channelId) { root.openEq(channelId) }
           onAddChannelRequested: function(type) {
             var count = channelManager.channels.filter(function(c) { return c.type === type }).length + 1
@@ -783,6 +825,7 @@ BarWidget {
           channel: root.channelById(root.activeChannelId)
           presets: channelManager.visiblePresets
           viewWidth: root.mixerContentWidth
+          cavaAvailable: root.cavaAvailable
           onBackRequested: root.backToMixer()
           onBandsChanged: function(channelId, bands) {
             root.applyEqLive(channelId, bands)

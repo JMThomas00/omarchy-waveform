@@ -19,6 +19,11 @@ Item {
   property var realInputDevices: []
   property string openDeviceDropdownChannelId: ""
   property color addMicAccentColor: Color.accent
+  // false only after a confirmed check finds lsp-plugins-lv2 missing (see
+  // BarWidget._checkDependencies) — every channel's EQ depends on it, so
+  // this warns up front rather than letting a channel silently roll back
+  // ~8s after creation with nothing but a console.warn to explain why.
+  property bool lspEqAvailable: true
 
   signal channelHeaderClicked(string channelId)
   signal addChannelRequested(string type)
@@ -50,6 +55,30 @@ Item {
     id: layout
     anchors.centerIn: parent
     spacing: Style.space(16)
+
+    Rectangle {
+      id: lspWarningBanner
+      visible: !root.lspEqAvailable
+      anchors.horizontalCenter: parent.horizontalCenter
+      width: row.implicitWidth
+      height: warningLabel.implicitHeight + Style.space(16)
+      radius: Style.cornerRadius
+      color: Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, 0.12)
+      border.width: Style.spacing.hairline
+      border.color: Qt.rgba(Color.urgent.r, Color.urgent.g, Color.urgent.b, 0.4)
+
+      Text {
+        id: warningLabel
+        anchors.centerIn: parent
+        width: parent.width - Style.space(24)
+        wrapMode: Text.WordWrap
+        horizontalAlignment: Text.AlignHCenter
+        text: "⚠ lsp-plugins-lv2 not found — channels need it to process audio and will roll back a few seconds after creation. Install with: sudo pacman -S lsp-plugins-lv2, then reopen this panel."
+        color: Color.urgent
+        font.family: root.bar ? root.bar.fontFamily : undefined
+        font.pixelSize: Style.font.bodySmall
+      }
+    }
 
     Row {
       id: row
