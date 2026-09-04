@@ -12,8 +12,21 @@ Item {
   property bool panelOpen: false
   property var apps: []
   property var dragGhostRef: null
+  // Hashed off a fixed pseudo-id (see BarWidget.qml's channelColorFor) so
+  // the "+ MIC" hover color is a real, theme-aware palette slot distinct
+  // from Color.accent (which "+ OUT" hovers to) — deterministic and
+  // consistent across restarts/theme switches, same mechanism a real
+  // channel's own color uses.
+  property color addMicAccentColor: Color.accent
 
   signal appDropped(var streamNode, string zoneId)
+  // "output" | "input" — see MixerView.qml's own addChannelRequested,
+  // which this just forwards. Lives here (not in the trailing standalone
+  // column MixerView used to render past the last channel) so MASTER's
+  // otherwise-empty EQ-name/device-name rows do double duty as the add
+  // buttons, keeping the whole mixer symmetric: MASTER + N real channels,
+  // no dangling extra column throwing off the row's overall centering.
+  signal addChannelRequested(string type)
 
   readonly property real volume: node && node.audio ? node.audio.volume : 0
   readonly property bool muted: node && node.audio ? node.audio.muted : false
@@ -40,8 +53,8 @@ Item {
     // here doesn't break any single row's internal centering (every child
     // already centers itself within whatever width `column` has), but it
     // does throw off the row of boxes below the faders (Apps zone, and
-    // this column's own invisible DeviceDropdown placeholder) relative to
-    // the matching boxes in every ChannelColumn, since equal Row spacing
+    // this column's own "+ MIC" button) relative to the matching boxes in
+    // every ChannelColumn, since equal Row spacing
     // between differently-sized columns doesn't produce equal box-edge
     // alignment even though each column's own contents stay centered.
     width: Style.space(116)
@@ -63,26 +76,61 @@ Item {
       opacity: 0.85
     }
 
+    // Sits in the same row ChannelColumn uses for its EQ preset name —
+    // same font/size so the row height (and everything below it) still
+    // lines up with every channel column. MASTER has no EQ preset of its
+    // own, so this row is free to be the "+ OUT" add-channel button
+    // instead of an inert placeholder.
     Text {
+      id: addOutLabel
       anchors.horizontalCenter: parent.horizontalCenter
-      text: "Flat"
-      opacity: 0
+      text: "+ OUT"
+      color: addOutArea.containsMouse ? Color.accent : Qt.darker(root.fg, 1.4)
       font.family: root.bar ? root.bar.fontFamily : undefined
       font.pixelSize: Style.font.bodySmall
+      font.bold: true
+
+      MouseArea {
+        id: addOutArea
+        anchors.fill: parent
+        anchors.margins: -Style.space(4)
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.addChannelRequested("output")
+      }
     }
 
-    // Invisible placeholder matching ChannelColumn's DeviceDropdown row —
-    // added this session, and MASTER regressed out of alignment with the
-    // channel columns again the same way it did before (see the "Flat"
-    // placeholder above, from the original fix): MASTER has no per-channel
-    // device to pick, but still needs the identical vertical rhythm above
-    // the fader, or everything below (fader, %, mute, Apps zone) sits too
-    // high relative to the channel columns.
-    DeviceDropdown {
+    // Same row ChannelColumn uses for its DeviceDropdown — no background
+    // box (matching "+ OUT"'s own plain-text look), but still wrapped in
+    // an Item pinned to that row's exact height (label.implicitHeight +
+    // Style.space(6), same formula DeviceDropdown.qml's trigger uses) so
+    // removing the box doesn't shrink the row and throw off the vertical
+    // rhythm below. Hovers to a different theme color than "+ OUT" (which
+    // hovers to Color.accent) so the two read as distinct actions.
+    Item {
+      id: addMicWrap
       anchors.horizontalCenter: parent.horizontalCenter
-      width: parent.width
-      opacity: 0
-      enabled: false
+      width: micLabel.implicitWidth
+      height: micLabel.implicitHeight + Style.space(6)
+
+      Text {
+        id: micLabel
+        anchors.centerIn: parent
+        text: "+ MIC"
+        color: addMicArea.containsMouse ? root.addMicAccentColor : Qt.darker(root.fg, 1.4)
+        font.family: root.bar ? root.bar.fontFamily : undefined
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+
+      MouseArea {
+        id: addMicArea
+        anchors.fill: parent
+        anchors.margins: -Style.space(4)
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.addChannelRequested("input")
+      }
     }
 
     Item { width: 1; height: Style.space(4) }

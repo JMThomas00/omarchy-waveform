@@ -693,6 +693,7 @@ BarWidget {
           realOutputDevices: root.realOutputDevices
           realInputDevices: root.realInputDevices
           openDeviceDropdownChannelId: root.openDeviceDropdownChannelId
+          addMicAccentColor: root.channelColorFor("__waveform_add_mic__")
           onChannelHeaderClicked: function(channelId) { root.openEq(channelId) }
           onAddChannelRequested: function(type) {
             var count = channelManager.channels.filter(function(c) { return c.type === type }).length + 1
